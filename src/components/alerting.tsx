@@ -2,11 +2,15 @@ import {
   Action,
   ActionServiceProvider,
   Alert,
+  AlertingRuleChartExtension,
+  AlertingRulesSourceExtension,
   AlertSeverity,
   AlertStates,
   BlueInfoCircleIcon,
   consoleFetchJSON,
   GreenCheckCircleIcon,
+  isAlertingRuleChart,
+  isAlertingRulesSource,
   ListPageFilter,
   PrometheusAlert,
   PrometheusEndpoint,
@@ -22,7 +26,9 @@ import {
   TableColumn,
   Timestamp,
   useActivePerspective,
+  useExtensions,
   useListPageFilter,
+  useResolvedExtensions,
   VirtualizedTable,
   YellowExclamationTriangleIcon,
 } from '@openshift-console/dynamic-plugin-sdk';
@@ -59,6 +65,7 @@ import {
 } from '@patternfly/react-icons';
 import { sortable } from '@patternfly/react-table';
 import classNames from 'classnames';
+import { TFunction } from 'i18next';
 import * as _ from 'lodash-es';
 import * as React from 'react';
 import { Helmet } from 'react-helmet';
@@ -82,6 +89,7 @@ import {
   PodModel,
   StatefulSetModel,
 } from './console/models';
+import { AsyncComponent } from './console/utils/async';
 import { SectionHeading } from './console/utils/headings';
 import { ExternalLink, LinkifyExternal } from './console/utils/link';
 import { getAllQueryArguments } from './console/utils/router';
@@ -94,6 +102,7 @@ import {
   alertingSetRules,
 } from '../actions/observe';
 import MonitoringDashboardsPage from './dashboards';
+import { fetchAlerts } from './fetch-alerts';
 import { useBoolean } from './hooks/useBoolean';
 import KebabDropdown from './kebab-dropdown';
 import { Labels } from './labels';
@@ -128,10 +137,17 @@ const SelectedSilencesContext = React.createContext({
 
 const ruleURL = (rule: Rule) => `${RuleResource.plural}/${_.get(rule, 'id')}`;
 
-const alertingRuleSource = (rule: Rule): AlertSource =>
-  rule.labels?.prometheus === 'openshift-monitoring/k8s' ? AlertSource.Platform : AlertSource.User;
+const alertingRuleSource = (rule: Rule): AlertSource | string => {
+  if (rule.sourceId === undefined || rule.sourceId === 'prometheus') {
+    return rule.labels?.prometheus === 'openshift-monitoring/k8s'
+      ? AlertSource.Platform
+      : AlertSource.User;
+  }
 
-const alertSource = (alert: Alert): AlertSource => alertingRuleSource(alert.rule);
+  return rule.sourceId;
+};
+
+const alertSource = (alert: Alert): AlertSource | string => alertingRuleSource(alert.rule);
 
 const pollers = {};
 const pollerTimeouts = {};
@@ -644,7 +660,7 @@ const HeaderAlertMessage: React.FC<{ alert: Alert; rule: Rule }> = ({ alert, rul
   );
 };
 
-const getSourceKey = (source, t) => {
+const getSourceKey = (source, t: TFunction) => {
   switch (source) {
     case 'Platform':
       return t('Platform');
@@ -709,6 +725,7 @@ const AlertsDetailsPage_: React.FC<AlertsDetailsPageProps> = ({ history, match }
 
   const isDevPerspective = _.has(match.params, 'ns');
   const namespace = match.params?.ns;
+  const hideGraphs = useSelector(({ observe }: RootState) => !!observe.get('hideGraphs'));
 
   const alerts: Alerts = useSelector(({ observe }: RootState) =>
     observe.get(isDevPerspective ? 'devAlerts' : 'alerts'),
@@ -728,6 +745,14 @@ const AlertsDetailsPage_: React.FC<AlertsDetailsPageProps> = ({ history, match }
 
   // eslint-disable-next-line camelcase
   const runbookURL = alert?.annotations?.runbook_url;
+
+  const sourceId = rule?.sourceId;
+
+  // Load alert metrics chart from plugin
+  const alertsChartExtensions = useExtensions<AlertingRuleChartExtension>(isAlertingRuleChart);
+  const alertsChart = alertsChartExtensions
+    .filter((extension) => extension.properties.sourceId === sourceId)
+    .map((extension) => extension.properties.chart);
 
   return (
     <>
@@ -799,12 +824,16 @@ const AlertsDetailsPage_: React.FC<AlertsDetailsPageProps> = ({ history, match }
           <div className="co-m-pane__body-group">
             <div className="row">
               <div className="col-sm-12">
-                <Graph
-                  filterLabels={labels}
-                  namespace={namespace}
-                  query={rule?.query}
-                  ruleDuration={rule?.duration}
-                />
+                {!sourceId || sourceId === 'prometheus' ? (
+                  <Graph
+                    filterLabels={labels}
+                    namespace={namespace}
+                    query={rule?.query}
+                    ruleDuration={rule?.duration}
+                  />
+                ) : alertsChart && alertsChart.length > 0 && !hideGraphs ? (
+                  <AsyncComponent loader={alertsChart[0]} rule={rule} />
+                ) : null}
               </div>
             </div>
             <div className="row">
@@ -1026,6 +1055,14 @@ const AlertRulesDetailsPage_: React.FC<AlertRulesDetailsPageProps> = ({ match })
     ({ observe }: RootState) => observe.get(isDevPerspective ? 'devAlerts' : 'alerts') || {},
   );
 
+  const sourceId = rule?.sourceId;
+
+  // Load alert metrics chart from plugin
+  const alertsChartExtensions = useExtensions<AlertingRuleChartExtension>(isAlertingRuleChart);
+  const alertsChart = alertsChartExtensions
+    .filter((extension) => extension.properties.sourceId === sourceId)
+    .map((extension) => extension.properties.chart);
+
   const formatSeriesTitle = (alertLabels) => {
     const nameLabel = alertLabels.__name__ ?? '';
     const otherLabels = _.omit(alertLabels, '__name__');
@@ -1166,13 +1203,17 @@ const AlertRulesDetailsPage_: React.FC<AlertRulesDetailsPageProps> = ({ match })
             </Toolbar>
             <div className="row">
               <div className="col-sm-12">
-                <Graph
-                  formatSeriesTitle={formatSeriesTitle}
-                  namespace={namespace}
-                  query={rule?.query}
-                  ruleDuration={rule?.duration}
-                  showLegend
-                />
+                {!sourceId || sourceId === 'prometheus' ? (
+                  <Graph
+                    formatSeriesTitle={formatSeriesTitle}
+                    namespace={namespace}
+                    query={rule?.query}
+                    ruleDuration={rule?.duration}
+                    showLegend
+                  />
+                ) : alertsChart && alertsChart.length > 0 ? (
+                  <AsyncComponent loader={alertsChart[0]} rule={rule} />
+                ) : null}
               </div>
             </div>
             <div className="row">
@@ -1621,6 +1662,23 @@ const alertStateOrder = (alert: Alert) => [
     : _.get(alert, 'activeAt'),
 ];
 
+const getAdditionalSources = <T extends Alert | Rule>(
+  data: Array<T>,
+  itemSource: (item: T) => string,
+) => {
+  if (data) {
+    const additionalSources = new Set<string>();
+    data.forEach((item) => {
+      const source = itemSource(item);
+      if (source !== AlertSource.Platform && source !== AlertSource.User) {
+        additionalSources.add(source);
+      }
+    });
+    return Array.from(additionalSources).map((item) => ({ id: item, title: _.startCase(item) }));
+  }
+  return [];
+};
+
 const AlertsPage_: React.FC<Alerts> = () => {
   const { t } = useTranslation('public');
 
@@ -1631,6 +1689,11 @@ const AlertsPage_: React.FC<Alerts> = () => {
   }: Alerts = useSelector(({ observe }: RootState) => observe.get('alerts') || {});
   const silencesLoadError = useSelector(
     ({ observe }: RootState) => observe.get('silences')?.loadError,
+  );
+
+  const alertAdditionalSources = React.useMemo(
+    () => getAdditionalSources(data, alertSource),
+    [data],
   );
 
   const rowFilters: RowFilter[] = [
@@ -1662,6 +1725,7 @@ const AlertsPage_: React.FC<Alerts> = () => {
       items: [
         { id: AlertSource.Platform, title: t('Platform') },
         { id: AlertSource.User, title: t('User') },
+        ...alertAdditionalSources,
       ],
       reducer: alertSource,
       type: 'alert-source',
@@ -1815,6 +1879,11 @@ const RulesPage_: React.FC<{}> = () => {
     ({ observe }: RootState) => observe.get('silences')?.loadError,
   );
 
+  const ruleAdditionalSources = React.useMemo(
+    () => getAdditionalSources(data, alertingRuleSource),
+    [data],
+  );
+
   const rowFilters: RowFilter[] = [
     {
       filter: (filter, rule: Rule) => fuzzyCaseInsensitive(filter.selected?.[0], rule.name),
@@ -1831,6 +1900,7 @@ const RulesPage_: React.FC<{}> = () => {
       items: [
         { id: AlertSource.Platform, title: t('Platform') },
         { id: AlertSource.User, title: t('User') },
+        ...ruleAdditionalSources,
       ],
       reducer: alertingRuleSource,
       type: 'alerting-rule-source',
@@ -2210,6 +2280,17 @@ const AlertingPage: React.FC<RouteComponentProps<{ url: string }>> = ({ match })
 const PollerPages = () => {
   const dispatch = useDispatch();
 
+  const [customExtensions] =
+    useResolvedExtensions<AlertingRulesSourceExtension>(isAlertingRulesSource);
+
+  const alertsSource = React.useMemo(
+    () =>
+      customExtensions
+        .filter((extension) => extension.properties.contextId === 'observe-alerting')
+        .map((extension) => extension.properties),
+    [customExtensions],
+  );
+
   React.useEffect(() => {
     const { prometheusBaseURL } = window.SERVER_FLAGS;
 
@@ -2219,7 +2300,7 @@ const PollerPages = () => {
       dispatch(alertingLoading(alertsKey));
       const url = getPrometheusURL({ endpoint: PrometheusEndpoint.RULES });
       const poller = (): void => {
-        consoleFetchJSON(url)
+        fetchAlerts(url, alertsSource)
           .then(({ data }) => {
             const { alerts, rules } = getAlertsAndRules(data);
             dispatch(alertingLoaded(alertsKey, alerts));
@@ -2228,7 +2309,12 @@ const PollerPages = () => {
           .catch((e) => {
             dispatch(alertingErrored(alertsKey, e));
           })
-          .then(() => (pollerTimeouts[alertsKey] = setTimeout(poller, 15 * 1000)));
+          .then(() => {
+            if (pollerTimeouts[alertsKey]) {
+              clearTimeout(pollerTimeouts[alertsKey]);
+            }
+            pollerTimeouts[alertsKey] = setTimeout(poller, 15 * 1000);
+          });
       };
       pollers[alertsKey] = poller;
       poller();
@@ -2236,7 +2322,7 @@ const PollerPages = () => {
       dispatch(alertingErrored('alerts', new Error('prometheusBaseURL not set')));
     }
     return () => _.each(pollerTimeouts, clearTimeout);
-  }, [dispatch]);
+  }, [alertsSource, dispatch]);
 
   return (
     <Switch>
