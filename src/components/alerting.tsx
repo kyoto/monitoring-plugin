@@ -90,7 +90,6 @@ import {
   PodModel,
   StatefulSetModel,
 } from './console/models';
-import { AsyncComponent } from './console/utils/async';
 import { SectionHeading } from './console/utils/headings';
 import { ExternalLink, LinkifyExternal } from './console/utils/link';
 import { getAllQueryArguments } from './console/utils/router';
@@ -756,6 +755,8 @@ const AlertsDetailsPage_: React.FC<AlertsDetailsPageProps> = ({ history, match }
     .filter((extension) => extension.properties.sourceId === sourceId)
     .map((extension) => extension.properties.chart);
 
+  const AlertsChart = alertsChart?.[0];
+
   return (
     <>
       <StatusBox
@@ -833,8 +834,8 @@ const AlertsDetailsPage_: React.FC<AlertsDetailsPageProps> = ({ history, match }
                     query={rule?.query}
                     ruleDuration={rule?.duration}
                   />
-                ) : alertsChart && alertsChart.length > 0 && !hideGraphs ? (
-                  <AsyncComponent loader={alertsChart[0]} rule={rule} />
+                ) : AlertsChart && !hideGraphs ? (
+                  <AlertsChart rule={rule} />
                 ) : null}
               </div>
             </div>
@@ -1060,11 +1061,13 @@ const AlertRulesDetailsPage_: React.FC<AlertRulesDetailsPageProps> = ({ match })
   const sourceId = rule?.sourceId;
 
   // Load alert metrics chart from plugin
-  const [alertsChartExtensions] =
+  const [resolvedAlertsChartExtensions] =
     useResolvedExtensions<AlertingRuleChartExtension>(isAlertingRuleChart);
-  const alertsChart = alertsChartExtensions
+  const alertChartExtensions = resolvedAlertsChartExtensions
     .filter((extension) => extension.properties.sourceId === sourceId)
     .map((extension) => extension.properties.chart);
+
+  const AlertChart = alertChartExtensions[0];
 
   const formatSeriesTitle = (alertLabels) => {
     const nameLabel = alertLabels.__name__ ?? '';
@@ -1214,8 +1217,8 @@ const AlertRulesDetailsPage_: React.FC<AlertRulesDetailsPageProps> = ({ match })
                     ruleDuration={rule?.duration}
                     showLegend
                   />
-                ) : alertsChart && alertsChart.length > 0 ? (
-                  <AsyncComponent loader={alertsChart[0]} rule={rule} />
+                ) : AlertChart ? (
+                  <AlertChart rule={rule} />
                 ) : null}
               </div>
             </div>
